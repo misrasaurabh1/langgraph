@@ -33,20 +33,22 @@ REMOVE_ALL_MESSAGES = "__remove_all__"
 def _add_messages_wrapper(func: Callable) -> Callable[[Messages, Messages], Messages]:
     def _add_messages(
         left: Optional[Messages] = None, right: Optional[Messages] = None, **kwargs: Any
-    ) -> Union[Messages, Callable[[Messages, Messages], Messages]]:
+    ):
+        # Fast path: both provided
         if left is not None and right is not None:
             return func(left, right, **kwargs)
-        elif left is not None or right is not None:
-            msg = (
+        # Error if only one is given
+        if left is not None or right is not None:
+            raise ValueError(
                 f"Must specify non-null arguments for both 'left' and 'right'. Only "
-                f"received: '{'left' if left else 'right'}'."
+                f"received: '{'left' if left is not None else 'right'}'."
             )
-            raise ValueError(msg)
-        else:
-            return partial(func, **kwargs)
+        # Return partial if neither provided
+        return partial(func, **kwargs)
 
+    # Set docstring once for the wrapper
     _add_messages.__doc__ = func.__doc__
-    return cast(Callable[[Messages, Messages], Messages], _add_messages)
+    return _add_messages
 
 
 @_add_messages_wrapper
