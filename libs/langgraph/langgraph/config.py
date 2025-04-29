@@ -15,6 +15,9 @@ def _no_op_stream_writer(c: Any) -> None:
 
 
 def get_config() -> RunnableConfig:
+    v = var_child_runnable_config.get()
+    if v is not None:
+        return v
     if sys.version_info < (3, 11):
         try:
             if asyncio.current_task():
@@ -23,10 +26,7 @@ def get_config() -> RunnableConfig:
                 )
         except RuntimeError:
             pass
-    if var_config := var_child_runnable_config.get():
-        return var_config
-    else:
-        raise RuntimeError("Called get_config outside of a runnable context")
+    raise RuntimeError("Called get_config outside of a runnable context")
 
 
 def get_store() -> BaseStore:
@@ -182,4 +182,7 @@ def get_stream_writer() -> StreamWriter:
         ```
     """
     config = get_config()
-    return config[CONF].get(CONFIG_KEY_STREAM_WRITER, _no_op_stream_writer)
+    try:
+        return config[CONF][CONFIG_KEY_STREAM_WRITER]
+    except KeyError:
+        return _no_op_stream_writer
