@@ -1036,30 +1036,39 @@ def _coerce_state(schema: type[Any], input: dict[str, Any]) -> dict[str, Any]:
 
 
 def _control_branch(value: Any) -> Sequence[tuple[str, Any]]:
+    # Fast-path: value is a single Send object
     if isinstance(value, Send):
         return ((TASKS, value),)
-    commands: list[Command] = []
-    if isinstance(value, Command):
-        commands.append(value)
-    elif isinstance(value, (list, tuple)):
-        for cmd in value:
-            if isinstance(cmd, Command):
-                commands.append(cmd)
     rtn: list[tuple[str, Any]] = []
+    # Fast-path: value is a single Command
+    if isinstance(value, Command):
+        commands = (value,)
+    # Value is some iterable (list/tuple) of possibly-Commands
+    elif isinstance(value, (list, tuple)):
+        commands = [cmd for cmd in value if isinstance(cmd, Command)]
+        if not commands:
+            return rtn
+    else:
+        # Not a Command or Send or list/tuple of Commands
+        return rtn
     for command in commands:
         if command.graph == Command.PARENT:
             raise ParentCommand(command)
-        if isinstance(command.goto, Send):
-            rtn.append((TASKS, command.goto))
-        elif isinstance(command.goto, str):
-            rtn.append((CHANNEL_BRANCH_TO.format(command.goto), None))
+        goto = command.goto
+        # case: goto is Send
+        if isinstance(goto, Send):
+            rtn.append((TASKS, goto))
+        # case: goto is str
+        elif isinstance(goto, str):
+            rtn.append((CHANNEL_BRANCH_TO.format(goto), None))
         else:
-            rtn.extend(
-                (TASKS, go)
-                if isinstance(go, Send)
-                else (CHANNEL_BRANCH_TO.format(go), None)
-                for go in command.goto
-            )
+            # assume goto is iterable of Send or str
+            append = rtn.append
+            for go in goto:
+                if isinstance(go, Send):
+                    append((TASKS, go))
+                else:
+                    append((CHANNEL_BRANCH_TO.format(go), None))
     return rtn
 
 
