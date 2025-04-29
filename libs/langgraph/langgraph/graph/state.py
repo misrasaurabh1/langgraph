@@ -94,10 +94,15 @@ def _warn_invalid_state_schema(schema: Union[type[Any], Any]) -> None:
 
 
 def _get_node_name(node: RunnableLike) -> str:
-    if isinstance(node, Runnable):
+    # Fast path: get __name__ directly (for functions/methods), as this is the most common case
+    if callable(node):
+        try:
+            return node.__name__
+        except AttributeError:
+            # If a callable class instance, fallback to its class' __name__
+            return node.__class__.__name__
+    elif isinstance(node, Runnable):
         return node.get_name()
-    elif callable(node):
-        return getattr(node, "__name__", node.__class__.__name__)
     else:
         raise TypeError(f"Unsupported node type: {type(node)}")
 
