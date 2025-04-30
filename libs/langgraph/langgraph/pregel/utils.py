@@ -1,6 +1,5 @@
 import ast
 import inspect
-import re
 import textwrap
 from typing import Any, Callable, Optional
 
@@ -212,4 +211,10 @@ class NonLocals(ast.NodeVisitor):
 
 def is_xxh3_128_hexdigest(value: str) -> bool:
     """Check if the given string matches the format of xxh3_128_hexdigest."""
-    return bool(re.fullmatch(r"[0-9a-f]{32}", value))
+    # Must be exactly 32 chars, all lowercase hex
+    if len(value) != 32:
+        return False
+    for c in value:
+        if c not in "0123456789abcdef":
+            return False
+    return True
