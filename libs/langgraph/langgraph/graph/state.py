@@ -1038,28 +1038,37 @@ def _coerce_state(schema: type[Any], input: dict[str, Any]) -> dict[str, Any]:
 def _control_branch(value: Any) -> Sequence[tuple[str, Any]]:
     if isinstance(value, Send):
         return ((TASKS, value),)
-    commands: list[Command] = []
+    commands: list[Command]
     if isinstance(value, Command):
-        commands.append(value)
+        commands = [value]
     elif isinstance(value, (list, tuple)):
-        for cmd in value:
-            if isinstance(cmd, Command):
-                commands.append(cmd)
+        # Fast path: filter and collect Command instances in a single list comprehension
+        commands = [cmd for cmd in value if isinstance(cmd, Command)]
+    else:
+        commands = []  # Only case where value cannot produce results
+
+    # Fast path for output: most command.goto will be str or Send, rare case is an iterable
     rtn: list[tuple[str, Any]] = []
+    append_rtn = rtn.append
     for command in commands:
         if command.graph == Command.PARENT:
             raise ParentCommand(command)
-        if isinstance(command.goto, Send):
-            rtn.append((TASKS, command.goto))
-        elif isinstance(command.goto, str):
-            rtn.append((CHANNEL_BRANCH_TO.format(command.goto), None))
+        cg = command.goto
+        if isinstance(cg, Send):
+            append_rtn((TASKS, cg))
+        elif isinstance(cg, str):
+            append_rtn((CHANNEL_BRANCH_TO.format(cg), None))
         else:
-            rtn.extend(
-                (TASKS, go)
-                if isinstance(go, Send)
-                else (CHANNEL_BRANCH_TO.format(go), None)
-                for go in command.goto
-            )
+            # cg is assumed to be an iterable, so process all possible outputs; use local var for speed
+            append_rtn_ = append_rtn  # localize for even tighter loop
+            TASKS_ = TASKS
+            CHAN = CHANNEL_BRANCH_TO
+            # Only process elements in cg that are either Send or str
+            for go in cg:
+                if isinstance(go, Send):
+                    append_rtn_((TASKS_, go))
+                else:
+                    append_rtn_((CHAN.format(go), None))
     return rtn
 
 
