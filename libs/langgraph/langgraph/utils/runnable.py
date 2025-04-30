@@ -458,11 +458,14 @@ def is_async_generator(
     func: Any,
 ) -> TypeGuard[Callable[..., AsyncIterator]]:
     """Check if a function is an async generator."""
-    return (
-        inspect.isasyncgenfunction(func)
-        or hasattr(func, "__call__")
-        and inspect.isasyncgenfunction(func.__call__)
-    )
+    # Fast path: if func is a function or method, check directly
+    if inspect.isfunction(func) or inspect.ismethod(func):
+        return inspect.isasyncgenfunction(func)
+    # Only check __call__ if it exists
+    call = getattr(func, "__call__", None)
+    if call is not None:
+        return inspect.isasyncgenfunction(call)
+    return False
 
 
 def coerce_to_runnable(
