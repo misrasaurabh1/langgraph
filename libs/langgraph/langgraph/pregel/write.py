@@ -191,15 +191,26 @@ def _assemble_writes(
     writes: Sequence[Union[ChannelWriteEntry, ChannelWriteTupleEntry, Send]],
 ) -> list[tuple[str, Any]]:
     """Assembles the writes into a list of tuples."""
+
     tuples: list[tuple[str, Any]] = []
+
+    # Build type -> handler mapping to minimize isinstance checks in loop
+    # Assumes the three classes ChannelWriteEntry, ChannelWriteTupleEntry, Send are in global scope.
+    ChannelWriteEntryType = ChannelWriteEntry
+    ChannelWriteTupleEntryType = ChannelWriteTupleEntry
+    SendType = Send
+
     for w in writes:
-        if isinstance(w, Send):
+        wt = type(w)
+        if wt is SendType:
             tuples.append((TASKS, w))
-        elif isinstance(w, ChannelWriteTupleEntry):
-            if ww := w.mapper(w.value):
+        elif wt is ChannelWriteTupleEntryType:
+            ww = w.mapper(w.value)
+            if ww:
                 tuples.extend(ww)
-        elif isinstance(w, ChannelWriteEntry):
-            value = w.mapper(w.value) if w.mapper is not None else w.value
+        elif wt is ChannelWriteEntryType:
+            mapper = w.mapper
+            value = mapper(w.value) if mapper is not None else w.value
             if value is SKIP_WRITE:
                 continue
             if w.skip_none and value is None:
