@@ -4,7 +4,7 @@ import typing
 import warnings
 from collections import defaultdict
 from collections.abc import Awaitable, Hashable, Sequence
-from functools import partial
+from functools import lru_cache, partial
 from inspect import isclass, isfunction, ismethod, signature
 from types import FunctionType
 from typing import (
@@ -1023,10 +1023,12 @@ def _pick_mapper(
 ) -> Optional[Callable[[Any], Any]]:
     if state_keys == ["__root__"]:
         return None
-    if isclass(schema):
-        if issubclass(schema, dict):
+    # Use the cached version of isclass/issubclass
+    if _isclass(schema):
+        # Avoid issubclass if not needed (dict is not a subclass of BaseModel: order is important)
+        if _issubclass(schema, dict):
             return None
-        if issubclass(schema, (BaseModel, BaseModelV1)):
+        if _issubclass(schema, BaseModel) or _issubclass(schema, BaseModelV1):
             return SchemaCoercionMapper(schema, type_hints=type_hints)
     return partial(_coerce_state, schema)
 
@@ -1231,6 +1233,20 @@ def _get_schema(
                     if k in channels and isinstance(channels[k], BaseChannel)
                 },
             )
+
+
+# Cache issubclass checks, as these are expensive and often repeated for identical schemas
+@lru_cache(maxsize=128)
+def _issubclass(schema, parent):
+    try:
+        return issubclass(schema, parent)
+    except TypeError:
+        return False  # Not a class
+
+
+@lru_cache(maxsize=128)
+def _isclass(schema):
+    return isclass(schema)
 
 
 CHANNEL_BRANCH_TO = "branch:to:{}"
