@@ -71,8 +71,22 @@ class ChannelWrite(RunnableCallable):
         )
 
     def get_name(self, suffix: str | None = None, *, name: str | None = None) -> str:
+        # Optimization: minimize isinstance/attribute lookups in hot loop.
         if not name:
-            name = f"ChannelWrite<{','.join(w.channel if isinstance(w, ChannelWriteEntry) else '...' if isinstance(w, ChannelWriteTupleEntry) else w.node for w in self.writes)}>"
+            writes = self.writes
+            ChannelWriteEntryType = ChannelWriteEntry
+            ChannelWriteTupleEntryType = ChannelWriteTupleEntry
+            SendType = Send
+            parts = []
+            append = parts.append
+            for w in writes:
+                if isinstance(w, ChannelWriteEntryType):
+                    append(w.channel)
+                elif isinstance(w, ChannelWriteTupleEntryType):
+                    append("...")
+                else:
+                    append(w.node)
+            name = "ChannelWrite<" + ",".join(parts) + ">"
         return super().get_name(suffix, name=name)
 
     @property
