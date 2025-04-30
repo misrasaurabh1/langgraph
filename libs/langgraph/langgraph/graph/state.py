@@ -94,12 +94,20 @@ def _warn_invalid_state_schema(schema: Union[type[Any], Any]) -> None:
 
 
 def _get_node_name(node: RunnableLike) -> str:
+    # Fast path: if 'get_name' method exists and is callable, use it
+    get_name = getattr(node, "get_name", None)
+    if callable(get_name):
+        return get_name()
+    # Next, if node is a python callable, get its __name__ or its type name
+    if callable(node):
+        name = getattr(node, "__name__", None)
+        if name is not None:
+            return name
+        return type(node).__name__
+    # Last, fall back to isinstance check (should rarely hit)
     if isinstance(node, Runnable):
         return node.get_name()
-    elif callable(node):
-        return getattr(node, "__name__", node.__class__.__name__)
-    else:
-        raise TypeError(f"Unsupported node type: {type(node)}")
+    raise TypeError(f"Unsupported node type: {type(node)}")
 
 
 class StateNodeSpec(NamedTuple):
