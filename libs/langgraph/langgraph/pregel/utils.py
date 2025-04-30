@@ -16,18 +16,21 @@ def get_new_channel_versions(
     previous_versions: ChannelVersions, current_versions: ChannelVersions
 ) -> ChannelVersions:
     """Get subset of current_versions that are newer than previous_versions."""
-    if previous_versions:
-        version_type = type(next(iter(current_versions.values()), None))
-        null_version = version_type()  # type: ignore[misc]
-        new_versions = {
-            k: v
-            for k, v in current_versions.items()
-            if v > previous_versions.get(k, null_version)  # type: ignore[operator]
-        }
-    else:
-        new_versions = current_versions
+    # Fast path: no previous versions provided, return all current versions
+    if not previous_versions:
+        return current_versions
 
-    return new_versions
+    if not current_versions:
+        return {}
+
+    # Cache the 'null version' only if required for get()
+    first_val = next(iter(current_versions.values()))
+    version_type = type(first_val)
+    null_version = version_type()  # type: ignore[misc]
+
+    prev_get = previous_versions.get  # minor micro-optimization
+    # Build result dict using a dict comprehension
+    return {k: v for k, v in current_versions.items() if v > prev_get(k, null_version)}  # type: ignore[operator]
 
 
 def find_subgraph_pregel(candidate: Runnable) -> Optional[PregelProtocol]:
