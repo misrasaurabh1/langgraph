@@ -173,34 +173,55 @@ def ui_message_reducer(
         )
 
     """
+    # Normalize input to lists
     if not isinstance(left, list):
         left = [left]
-
     if not isinstance(right, list):
         right = [right]
 
-    # merge messages
-    merged = left.copy()
-    merged_by_id = {m.get("id"): i for i, m in enumerate(merged)}
-    ids_to_remove = set()
+    # Fast path: if nothing to merge
+    if not right:
+        return list(left)
+    if not left:
+        # Validate that no remove-ui is being requested for missing items
+        for msg in right:
+            if msg.get("type") == "remove-ui":
+                raise ValueError(
+                    f"Attempting to delete an UI message with an ID that doesn't exist ('{msg.get('id')}')"
+                )
+        return list(right)
+
+    # Build index for left messages
+    merged = list(left)
+    merged_by_id = {}
+    for i, m in enumerate(merged):
+        merged_by_id[m.get("id")] = i
+
+    ids_to_remove = None
 
     for msg in right:
         msg_id = msg.get("id")
-
-        if (existing_idx := merged_by_id.get(msg_id)) is not None:
-            if msg.get("type") == "remove-ui":
+        msg_type = msg.get("type")
+        existing_idx = merged_by_id.get(msg_id)
+        if existing_idx is not None:
+            if msg_type == "remove-ui":
+                if ids_to_remove is None:
+                    ids_to_remove = set()
                 ids_to_remove.add(msg_id)
             else:
-                ids_to_remove.discard(msg_id)
+                # Replace existing message (if not marked for removal yet)
+                if ids_to_remove is not None:
+                    ids_to_remove.discard(msg_id)
                 merged[existing_idx] = msg
         else:
-            if msg.get("type") == "remove-ui":
+            if msg_type == "remove-ui":
                 raise ValueError(
                     f"Attempting to delete an UI message with an ID that doesn't exist ('{msg_id}')"
                 )
-
             merged_by_id[msg_id] = len(merged)
             merged.append(msg)
 
-    merged = [m for m in merged if m.get("id") not in ids_to_remove]
+    if ids_to_remove:
+        # Only filter if removals happened
+        merged = [m for m in merged if m.get("id") not in ids_to_remove]
     return merged
