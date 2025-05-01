@@ -59,6 +59,7 @@ class ChannelRead(RunnableCallable):
         mapper: Callable[[Any], Any] | None = None,
         tags: list[str] | None = None,
     ) -> None:
+        # Avoid recomputation: self._read can close over (self)
         super().__init__(
             func=self._read,
             afunc=self._aread,
@@ -81,9 +82,20 @@ class ChannelRead(RunnableCallable):
         return super().get_name(suffix, name=name)
 
     def _read(self, _: Any, config: RunnableConfig) -> Any:
-        return self.do_read(
-            config, select=self.channel, fresh=self.fresh, mapper=self.mapper
-        )
+        # Inlined logic from do_read; locals for speed
+        try:
+            read = config[CONF][CONFIG_KEY_READ]
+        except KeyError:
+            raise RuntimeError(
+                "Not configured with a read function"
+                "Make sure to call in the context of a Pregel process"
+            )
+
+        result = read(self.channel, self.fresh)
+        mapper = self.mapper
+        if mapper is not None:
+            return mapper(result)
+        return result
 
     async def _aread(self, _: Any, config: RunnableConfig) -> Any:
         return self.do_read(
@@ -99,16 +111,16 @@ class ChannelRead(RunnableCallable):
         mapper: Callable[[Any], Any] | None = None,
     ) -> Any:
         try:
-            read: READ_TYPE = config[CONF][CONFIG_KEY_READ]
+            read = config[CONF][CONFIG_KEY_READ]
         except KeyError:
             raise RuntimeError(
                 "Not configured with a read function"
                 "Make sure to call in the context of a Pregel process"
             )
-        if mapper:
-            return mapper(read(select, fresh))
-        else:
-            return read(select, fresh)
+        result = read(select, fresh)
+        if mapper is not None:
+            return mapper(result)
+        return result
 
 
 DEFAULT_BOUND: RunnablePassthrough = RunnablePassthrough()
