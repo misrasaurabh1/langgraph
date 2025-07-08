@@ -62,9 +62,22 @@ class ChannelRead(RunnableCallable):
         return super().get_name(suffix, name=name)
 
     def _read(self, _: Any, config: RunnableConfig) -> Any:
-        return self.do_read(
-            config, select=self.channel, fresh=self.fresh, mapper=self.mapper
-        )
+        # Pull local refs for attribute access performance, minimize repeated lookups
+        channel = self.channel
+        fresh = self.fresh
+        mapper = self.mapper
+
+        # Inline do_read logic into here to avoid staticmethod overhead
+        try:
+            # One dict lookup, then one key lookup in inner dict
+            read = config[CONF][CONFIG_KEY_READ]
+        except KeyError:
+            raise RuntimeError(
+                "Not configured with a read function"
+                "Make sure to call in the context of a Pregel process"
+            )
+        result = read(channel, fresh)
+        return mapper(result) if mapper is not None else result
 
     async def _aread(self, _: Any, config: RunnableConfig) -> Any:
         return self.do_read(
