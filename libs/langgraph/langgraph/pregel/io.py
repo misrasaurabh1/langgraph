@@ -43,16 +43,28 @@ def read_channels(
     *,
     skip_empty: bool = True,
 ) -> dict[str, Any] | Any:
+    """
+    Optimized to inline the `read_channel` exception path, reducing function call overhead in large for-loop.
+    """
     if isinstance(select, str):
+        # No changes here, as this is the fast-path (single channel fetch).
         return read_channel(channels, select)
-    else:
-        values: dict[str, Any] = {}
-        for k in select:
-            try:
-                values[k] = read_channel(channels, k, catch=not skip_empty)
-            except EmptyChannelError:
-                pass
-        return values
+
+    # vectorized multi-channel fetch with optimized inline logic
+    values: dict[str, Any] = {}
+    catch = not skip_empty
+
+    channels_get = channels.__getitem__  # microoptimization: localize LBYL access
+    for k in select:
+        try:
+            value = channels_get(k).get()
+        except EmptyChannelError:
+            if catch:
+                value = None
+            else:
+                continue  # skip this key, as with original code
+        values[k] = value
+    return values
 
 
 def map_command(cmd: Command) -> Iterator[tuple[str, str, Any]]:
