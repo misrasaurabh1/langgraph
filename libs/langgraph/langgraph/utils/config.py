@@ -271,10 +271,9 @@ def get_async_callback_manager_for_config(
 
 
 def _is_not_empty(value: Any) -> bool:
-    if isinstance(value, (list, tuple, dict)):
+    if isinstance(value, COLLECTION_TYPES):
         return len(value) > 0
-    else:
-        return value is not None
+    return value is not None
 
 
 def ensure_config(*configs: RunnableConfig | None) -> RunnableConfig:
@@ -321,3 +320,6 @@ def ensure_config(*configs: RunnableConfig | None) -> RunnableConfig:
         ):
             empty["metadata"][key] = value
     return empty
+
+
+COLLECTION_TYPES = (list, tuple, dict)
