@@ -17,6 +17,8 @@ from typing import (
     cast,
 )
 
+import httpx
+import requests
 from langchain_core.runnables import Runnable, RunnableConfig
 from typing_extensions import Self
 from xxhash import xxh3_128_hexdigest
@@ -74,32 +76,15 @@ else:
 
 
 def default_retry_on(exc: Exception) -> bool:
-    import httpx
-    import requests
+    # Imports & exception construction moved to top-level for speed
 
-    if isinstance(exc, ConnectionError):
+    if isinstance(exc, _ConnectionError):
         return True
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, _HTTPStatusError):
         return 500 <= exc.response.status_code < 600
-    if isinstance(exc, requests.HTTPError):
+    if isinstance(exc, _HTTPError):
         return 500 <= exc.response.status_code < 600 if exc.response else True
-    if isinstance(
-        exc,
-        (
-            ValueError,
-            TypeError,
-            ArithmeticError,
-            ImportError,
-            LookupError,
-            NameError,
-            SyntaxError,
-            RuntimeError,
-            ReferenceError,
-            StopIteration,
-            StopAsyncIteration,
-            OSError,
-        ),
-    ):
+    if isinstance(exc, _NONRETRY_EXCEPTIONS):
         return False
     return True
 
@@ -527,3 +512,25 @@ def interrupt(value: Any) -> Any:
             ),
         )
     )
+
+
+_NONRETRY_EXCEPTIONS = (
+    ValueError,
+    TypeError,
+    ArithmeticError,
+    ImportError,
+    LookupError,
+    NameError,
+    SyntaxError,
+    RuntimeError,
+    ReferenceError,
+    StopIteration,
+    StopAsyncIteration,
+    OSError,
+)
+
+_ConnectionError = ConnectionError
+
+_HTTPStatusError = httpx.HTTPStatusError
+
+_HTTPError = requests.HTTPError
