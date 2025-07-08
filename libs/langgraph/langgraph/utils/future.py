@@ -29,15 +29,11 @@ def _get_loop(fut: asyncio.Future) -> asyncio.AbstractEventLoop:
 
 
 def _convert_future_exc(exc: BaseException) -> BaseException:
-    exc_class = type(exc)
-    if exc_class is concurrent.futures.CancelledError:
-        return asyncio.CancelledError(*exc.args)
-    elif exc_class is concurrent.futures.TimeoutError:
-        return asyncio.TimeoutError(*exc.args)
-    elif exc_class is concurrent.futures.InvalidStateError:
-        return asyncio.InvalidStateError(*exc.args)
-    else:
-        return exc
+    exc_type = type(exc)
+    ctor = _CONCURRENT_TO_ASYNCIO_EXC.get(exc_type)
+    if ctor is not None:
+        return ctor(*exc.args)
+    return exc
 
 
 def _set_concurrent_future_state(
@@ -218,3 +214,10 @@ def run_coroutine_threadsafe(
 
         loop.call_soon_threadsafe(callback, context=context)
         return future
+
+
+_CONCURRENT_TO_ASYNCIO_EXC = {
+    concurrent.futures.CancelledError: asyncio.CancelledError,
+    concurrent.futures.TimeoutError: asyncio.TimeoutError,
+    concurrent.futures.InvalidStateError: asyncio.InvalidStateError,
+}
