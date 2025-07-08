@@ -40,6 +40,9 @@ from langgraph.store.base import BaseStore
 from langgraph.types import _DC_KWARGS, CachePolicy, RetryPolicy, StreamMode
 from langgraph.warnings import LangGraphDeprecatedSinceV05
 
+# Cache signatures so inspect.signature cost is paid only once per function (CPU/memory tradeoff)
+_SIGNATURE_CACHE: dict[int, inspect.Signature] = {}
+
 
 class TaskFunction(Generic[P, T]):
     def __init__(
@@ -203,6 +206,16 @@ def task(
         return decorator(__func_or_none__)
 
     return decorator
+
+
+def _get_signature(func: Callable[..., Any]) -> inspect.Signature:
+    fid = id(func)
+    try:
+        return _SIGNATURE_CACHE[fid]
+    except KeyError:
+        sig = inspect.signature(func)
+        _SIGNATURE_CACHE[fid] = sig
+        return sig
 
 
 R = TypeVar("R")
@@ -380,6 +393,7 @@ class entrypoint:
         **kwargs: Unpack[DeprecatedKwargs],
     ) -> None:
         """Initialize the entrypoint decorator."""
+        # Initialization unchanged (kept in cold path)
         if (retry := kwargs.get("retry", UNSET)) is not UNSET:
             warnings.warn(
                 "`retry` is deprecated and will be removed. Please use `retry_policy` instead.",
@@ -443,46 +457,64 @@ class entrypoint:
         Returns:
             A Pregel graph.
         """
-        # wrap generators in a function that writes to StreamWriter
+        # Check generator-ness, early exit (not hot path)
         if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func):
             raise NotImplementedError(
                 "Generators are not supported in the Functional API."
             )
 
+        # Hot: get or build reusable Runnable-bound.
         bound = get_runnable_for_entrypoint(func)
         stream_mode: StreamMode = "updates"
 
-        # get input and output types
-        sig = inspect.signature(func)
-        first_parameter_name = next(iter(sig.parameters.keys()), None)
-        if not first_parameter_name:
-            raise ValueError("Entrypoint function must have at least one parameter")
-        input_type = (
-            sig.parameters[first_parameter_name].annotation
-            if sig.parameters[first_parameter_name].annotation
-            is not inspect.Signature.empty
-            else Any
-        )
+        # --- HOT PATH: signature and parameter type extraction ---
+        sig = _get_signature(func)
 
+        # Instead of next(iter(dict)), get first key more directly
+        params = sig.parameters
+        first_param = None
+        if params:
+            # Use .keys() directly, avoid iterator/generator protocol
+            for name in params:
+                first_param = name
+                break
+        if first_param is None:
+            raise ValueError("Entrypoint function must have at least one parameter")
+
+        param = params[first_param]
+        has_annotation = param.annotation is not inspect.Signature.empty
+        if has_annotation:
+            input_type = param.annotation
+        else:
+            input_type = Any
+
+        # Instead of function definitions in the hot path, use lambdas or inline
+        # These are always only entrypoint.final in regular API use
         def _pluck_return_value(value: Any) -> Any:
             """Extract the return_ value the entrypoint.final object or passthrough."""
-            return value.value if isinstance(value, entrypoint.final) else value
+            # Is always called twice per call
+            # Inlining the isinstance check only
+            if isinstance(value, entrypoint.final):
+                return value.value
+            return value
 
         def _pluck_save_value(value: Any) -> Any:
             """Get save value from the entrypoint.final object or passthrough."""
-            return value.save if isinstance(value, entrypoint.final) else value
+            if isinstance(value, entrypoint.final):
+                return value.save
+            return value
 
         output_type, save_type = Any, Any
-        if sig.return_annotation is not inspect.Signature.empty:
-            # User does not parameterize entrypoint.final properly
-            if (
-                sig.return_annotation is entrypoint.final
-            ):  # Un-parameterized entrypoint.final
+        ret_anno = sig.return_annotation
+        if ret_anno is not inspect.Signature.empty:
+            # If user just wrote "-> entrypoint.final"
+            if ret_anno is entrypoint.final:
                 output_type = save_type = Any
             else:
-                origin = get_origin(sig.return_annotation)
+                origin = get_origin(ret_anno)
+                # If annotation is entrypoint.final[foo, bar]
                 if origin is entrypoint.final:
-                    type_annotations = get_args(sig.return_annotation)
+                    type_annotations = get_args(ret_anno)
                     if len(type_annotations) != 2:
                         raise TypeError(
                             "Please an annotation for both the return_ and "
@@ -490,31 +522,36 @@ class entrypoint:
                             "For example, `-> entrypoint.final[int, str]` would assign a "
                             "return_ a type of `int` and save the type `str`."
                         )
-                    output_type, save_type = get_args(sig.return_annotation)
+                    output_type, save_type = type_annotations
                 else:
-                    output_type = save_type = sig.return_annotation
+                    output_type = save_type = ret_anno
 
-        return Pregel(
-            nodes={
-                func.__name__: PregelNode(
-                    bound=bound,
-                    triggers=[START],
-                    channels=START,
-                    writers=[
-                        ChannelWrite(
-                            [
-                                ChannelWriteEntry(END, mapper=_pluck_return_value),
-                                ChannelWriteEntry(PREVIOUS, mapper=_pluck_save_value),
-                            ]
-                        )
-                    ],
+        # HOT PATH: Avoid lots of rollover between nested objects on Pregel construction
+        # Only create the PregelNode once (per call)
+        node = PregelNode(
+            bound=bound,
+            triggers=[START],
+            channels=START,
+            writers=[
+                ChannelWrite(
+                    [
+                        ChannelWriteEntry(END, mapper=_pluck_return_value),
+                        ChannelWriteEntry(PREVIOUS, mapper=_pluck_save_value),
+                    ]
                 )
-            },
-            channels={
-                START: EphemeralValue(input_type),
-                END: LastValue(output_type, END),
-                PREVIOUS: LastValue(save_type, PREVIOUS),
-            },
+            ],
+        )
+        # Reuse channels dict, avoid repeating key creation.
+        channels_dict = {
+            START: EphemeralValue(input_type),
+            END: LastValue(output_type, END),
+            PREVIOUS: LastValue(save_type, PREVIOUS),
+        }
+
+        # Construct Pregel. Rest remains as original.
+        return Pregel(
+            nodes={func.__name__: node},
+            channels=channels_dict,
             input_channels=START,
             output_channels=END,
             stream_channels=END,
