@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import functools
 import inspect
 import sys
 from collections.abc import (
@@ -24,6 +25,7 @@ from typing import (
     cast,
 )
 
+from langchain_core.runnables import Runnable
 from langchain_core.runnables.base import (
     Runnable,
     RunnableConfig,
@@ -443,15 +445,18 @@ class RunnableCallable(Runnable):
         return ret
 
 
+@functools.lru_cache(maxsize=256)
 def is_async_callable(
     func: Any,
 ) -> TypeGuard[Callable[..., Awaitable]]:
     """Check if a function is async."""
-    return (
-        asyncio.iscoroutinefunction(func)
-        or hasattr(func, "__call__")
-        and asyncio.iscoroutinefunction(func.__call__)
-    )
+    if asyncio.iscoroutinefunction(func):
+        return True
+    # avoid hasattr unless needed (most callables are not objects)
+    call_attr = getattr(func, "__call__", None)
+    if call_attr is None or call_attr is func:
+        return False
+    return asyncio.iscoroutinefunction(call_attr)
 
 
 def is_async_generator(
