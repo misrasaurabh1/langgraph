@@ -87,46 +87,38 @@ def merge_configs(*configs: RunnableConfig | None) -> RunnableConfig:
         RunnableConfig: The merged config.
     """
     base: RunnableConfig = {}
-    # Even though the keys aren't literals, this is correct
-    # because both dicts are the same type
     for config in configs:
-        if config is None:
+        if not config:
             continue
         for key, value in config.items():
             if not value:
                 continue
-            if key == "metadata":
-                if base_value := base.get(key):
-                    base[key] = {**base_value, **value}  # type: ignore
-                else:
-                    base[key] = value  # type: ignore[literal-required]
-            elif key == "tags":
-                if base_value := base.get(key):
-                    base[key] = [*base_value, *value]  # type: ignore
-                else:
-                    base[key] = value  # type: ignore[literal-required]
-            elif key == CONF:
-                if base_value := base.get(key):
-                    base[key] = {**base_value, **value}  # type: ignore[dict-item]
+            # Merge metadata and tags efficiently
+            if key == "metadata" or key == CONF:
+                base_value = base.get(key)
+                if base_value:
+                    base[key] = {**base_value, **value}
                 else:
                     base[key] = value
+            elif key == "tags":
+                base_value = base.get("tags")
+                if base_value:
+                    base["tags"] = [*base_value, *value]
+                else:
+                    base["tags"] = value
             elif key == "callbacks":
                 base_callbacks = base.get("callbacks")
-                # callbacks can be either None, list[handler] or manager
-                # so merging two callbacks values has 6 cases
                 if isinstance(value, list):
                     if base_callbacks is None:
                         base["callbacks"] = value.copy()
                     elif isinstance(base_callbacks, list):
                         base["callbacks"] = base_callbacks + value
                     else:
-                        # base_callbacks is a manager
                         mngr = base_callbacks.copy()
                         for callback in value:
                             mngr.add_handler(callback, inherit=True)
                         base["callbacks"] = mngr
                 elif isinstance(value, BaseCallbackManager):
-                    # value is a manager
                     if base_callbacks is None:
                         base["callbacks"] = value.copy()
                     elif isinstance(base_callbacks, list):
@@ -135,15 +127,14 @@ def merge_configs(*configs: RunnableConfig | None) -> RunnableConfig:
                             mngr.add_handler(callback, inherit=True)
                         base["callbacks"] = mngr
                     else:
-                        # base_callbacks is also a manager
                         base["callbacks"] = base_callbacks.merge(value)
                 else:
                     raise NotImplementedError
             elif key == "recursion_limit":
-                if config["recursion_limit"] != DEFAULT_RECURSION_LIMIT:
+                if config.get("recursion_limit", None) != DEFAULT_RECURSION_LIMIT:
                     base["recursion_limit"] = config["recursion_limit"]
             else:
-                base[key] = config[key]  # type: ignore[literal-required]
+                base[key] = value
     if CONF not in base:
         base[CONF] = {}
     return base

@@ -100,7 +100,7 @@ class RemoteGraph(PregelProtocol):
 
     def __init__(
         self,
-        assistant_id: str,  # graph_id
+        assistant_id: str,
         /,
         *,
         url: str | None = None,
@@ -130,19 +130,19 @@ class RemoteGraph(PregelProtocol):
                 If not provided, defaults to the assistant ID.
         """
         self.assistant_id = assistant_id
-        if name is None:
-            self.name = assistant_id
-        else:
-            self.name = name
+        self.name = assistant_id if name is None else name
         self.config = config
 
-        if client is None and url is not None:
-            client = get_client(url=url, api_key=api_key, headers=headers)
-        self.client = client
-
-        if sync_client is None and url is not None:
-            sync_client = get_sync_client(url=url, api_key=api_key, headers=headers)
-        self.sync_client = sync_client
+        self.client = client or (
+            get_client(url=url, api_key=api_key, headers=headers)
+            if url and client is None
+            else None
+        )
+        self.sync_client = sync_client or (
+            get_sync_client(url=url, api_key=api_key, headers=headers)
+            if url and sync_client is None
+            else None
+        )
 
     def _validate_client(self) -> LangGraphClient:
         if self.client is None:
@@ -152,11 +152,12 @@ class RemoteGraph(PregelProtocol):
         return self.client
 
     def _validate_sync_client(self) -> SyncLangGraphClient:
-        if self.sync_client is None:
+        s = self.sync_client
+        if s is None:
             raise ValueError(
                 "Sync client is not initialized: please provide `url` or `sync_client` when initializing `RemoteGraph`."
             )
-        return self.sync_client
+        return s
 
     def copy(self, update: dict[str, Any]) -> Self:
         attrs = {**self.__dict__, **update}
@@ -310,19 +311,12 @@ class RemoteGraph(PregelProtocol):
     def _get_checkpoint(self, config: RunnableConfig | None) -> Checkpoint | None:
         if config is None:
             return None
-
-        checkpoint = {}
-
-        if "thread_id" in config["configurable"]:
-            checkpoint["thread_id"] = config["configurable"]["thread_id"]
-        if "checkpoint_ns" in config["configurable"]:
-            checkpoint["checkpoint_ns"] = config["configurable"]["checkpoint_ns"]
-        if "checkpoint_id" in config["configurable"]:
-            checkpoint["checkpoint_id"] = config["configurable"]["checkpoint_id"]
-        if "checkpoint_map" in config["configurable"]:
-            checkpoint["checkpoint_map"] = config["configurable"]["checkpoint_map"]
-
-        return checkpoint if checkpoint else None
+        c = config.get("configurable", config)
+        cp = {}
+        for k in ("thread_id", "checkpoint_ns", "checkpoint_id", "checkpoint_map"):
+            if k in c:
+                cp[k] = c[k]
+        return cp if cp else None
 
     def _get_config(self, checkpoint: Checkpoint) -> RunnableConfig:
         return {
@@ -522,9 +516,9 @@ class RemoteGraph(PregelProtocol):
         """
         sync_client = self._validate_sync_client()
         merged_config = merge_configs(self.config, config)
-
+        mconf_c = merged_config["configurable"]
         response: dict = sync_client.threads.update_state(  # type: ignore
-            thread_id=merged_config["configurable"]["thread_id"],
+            thread_id=mconf_c["thread_id"],
             values=values,
             as_node=as_node,
             checkpoint=self._get_checkpoint(merged_config),
