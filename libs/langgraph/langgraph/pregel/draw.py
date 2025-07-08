@@ -252,9 +252,18 @@ def add_edge(
     conditional: bool = False,
 ) -> None:
     """Add an edge to the graph."""
-    for edge in graph.edges:
-        if edge.source == source and edge.target == target:
-            return
+
+    # Build a set of (source, target) for O(1) edge existence check
+    if not hasattr(graph, "_edge_index_set"):
+        # Only build it once; keep in sync on every insertion
+        graph._edge_index_set = set((edge.source, edge.target) for edge in graph.edges)
+    edge_key = (source, target)
+    if edge_key in graph._edge_index_set:
+        return
+
+    # Add node if necessary
     if target not in graph.nodes and target == END:
         graph.add_node(None, END)
+    # Actually add edge in graph and to index
     graph.add_edge(graph.nodes[source], graph.nodes[target], data, conditional)
+    graph._edge_index_set.add(edge_key)
