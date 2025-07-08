@@ -1253,15 +1253,17 @@ def _control_branch(value: Any) -> Sequence[tuple[str, Any]]:
 def _control_static(
     ends: tuple[str, ...] | dict[str, str],
 ) -> Sequence[tuple[str, Any, str | None]]:
+    # Move END and string pattern out of loop for speed
+    end = END
+    pattern = CHANNEL_BRANCH_TO
     if isinstance(ends, dict):
+        # Fast string concat instead of .format for performance
         return [
-            (k if k == END else CHANNEL_BRANCH_TO.format(k), None, label)
+            (k if k == end else f"branch:to:{k}", None, label)
             for k, label in ends.items()
         ]
     else:
-        return [
-            (e if e == END else CHANNEL_BRANCH_TO.format(e), None, None) for e in ends
-        ]
+        return [(e if e == end else f"branch:to:{e}", None, None) for e in ends]
 
 
 def _get_root(input: Any) -> Sequence[tuple[str, Any]] | None:
