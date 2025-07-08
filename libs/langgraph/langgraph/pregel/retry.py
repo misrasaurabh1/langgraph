@@ -217,5 +217,5 @@ def _should_retry_on(retry_policy: RetryPolicy, exc: Exception) -> bool:
         return isinstance(exc, tuple(retry_on))
     else:
         raise TypeError(
-            "retry_on must be an Exception class, a tuple of Exception classes, a sequence of Exception classes, or a callable"
+            "retry_on must be an Exception class, a list or tuple of Exception classes, or a callable"
         )
