@@ -145,31 +145,33 @@ def should_interrupt(
     tasks: Iterable[PregelExecutableTask],
 ) -> list[PregelExecutableTask]:
     """Check if the graph should be interrupted based on current state."""
-    version_type = type(next(iter(checkpoint["channel_versions"].values()), None))
+    channel_versions = checkpoint["channel_versions"]
+    seen_versions = checkpoint["versions_seen"].get(INTERRUPT, {})
+    version_type = type(next(iter(channel_versions.values()), None))
     null_version = version_type()  # type: ignore[misc]
-    seen = checkpoint["versions_seen"].get(INTERRUPT, {})
-    # interrupt if any channel has been updated since last interrupt
-    any_updates_since_prev_interrupt = any(
-        version > seen.get(chan, null_version)  # type: ignore[operator]
-        for chan, version in checkpoint["channel_versions"].items()
-    )
-    # and any triggered node is in interrupt_nodes list
-    return (
-        [
-            task
-            for task in tasks
-            if (
-                (
-                    not task.config
-                    or TAG_HIDDEN not in task.config.get("tags", EMPTY_SEQ)
-                )
-                if interrupt_nodes == "*"
-                else task.name in interrupt_nodes
-            )
-        ]
-        if any_updates_since_prev_interrupt
-        else []
-    )
+
+    # any channel has been updated since last interrupt?
+    any_updates_since_prev_interrupt = False
+    for chan, version in channel_versions.items():
+        if version > seen_versions.get(chan, null_version):  # type: ignore[operator]
+            any_updates_since_prev_interrupt = True
+            break
+
+    if not any_updates_since_prev_interrupt:
+        return []
+
+    # Optimize: convert to set if interrupt_nodes is a Sequence (not "*")
+    is_all = interrupt_nodes == "*"
+    if not is_all:
+        interrupt_nodes_set = set(interrupt_nodes)
+        return [task for task in tasks if task.name in interrupt_nodes_set]
+    else:
+        result = []
+        for task in tasks:
+            config = task.config
+            if not config or TAG_HIDDEN not in config.get("tags", EMPTY_SEQ):
+                result.append(task)
+        return result
 
 
 def local_read(
