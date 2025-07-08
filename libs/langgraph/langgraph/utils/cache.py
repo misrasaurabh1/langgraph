@@ -5,20 +5,37 @@ from typing import Any
 
 
 def _freeze(obj: Any, depth: int = 10) -> Hashable:
-    if isinstance(obj, Hashable) or depth <= 0:
-        # already hashable, no need to freeze
+    # Optimize fast path for common immutable/primitive types
+    if obj is None or isinstance(obj, (int, float, complex, str, bytes)):
         return obj
-    elif isinstance(obj, Mapping):
-        # sort keys so {"a":1,"b":2} == {"b":2,"a":1}
-        return tuple(sorted((k, _freeze(v, depth - 1)) for k, v in obj.items()))
-    elif isinstance(obj, Sequence):
-        return tuple(_freeze(x, depth - 1) for x in obj)
+    # Early exit if depth exhausted
+    if depth <= 0:
+        return obj
+    # Avoid boolean being treated as an int (since bool is subclass of int)
+    if isinstance(obj, bool):
+        return obj
+    # Fast path for pre-hashable types
+    if isinstance(obj, Hashable):
+        return obj
+    # Optimize Mapping path
+    if isinstance(obj, Mapping):
+        # Sort keys so {"a":1,"b":2} == {"b":2,"a":1}
+        # Don't use generator+sorted+tuple (costly on small dicts)
+        out = []
+        for k, v in obj.items():
+            out.append((k, _freeze(v, depth - 1)))
+        out.sort()
+        return tuple(out)
+    # Optimize Sequence but avoid str, bytes, bytearray
+    if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes, bytearray)):
+        out = [_freeze(x, depth - 1) for x in obj]
+        return tuple(out)
     # numpy / pandas etc. can provide their own .tobytes()
-    elif hasattr(obj, "tobytes"):
+    if hasattr(obj, "tobytes"):
         return (
             type(obj).__name__,
             obj.tobytes(),
-            obj.shape if hasattr(obj, "shape") else None,
+            getattr(obj, "shape", None),
         )
     return obj  # strings, ints, dataclasses with frozen=True, etc.
 
