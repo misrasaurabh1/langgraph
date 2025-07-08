@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, Union
 from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
@@ -177,40 +177,47 @@ def ui_message_reducer(
         )
 
     """
+    # Normalize inputs only if needed
     if not isinstance(left, list):
         left = [left]
-
     if not isinstance(right, list):
         right = [right]
 
-    # merge messages
-    merged = left.copy()
-    merged_by_id = {m.get("id"): i for i, m in enumerate(merged)}
+    merged = left.copy()  # Start with left side preserved order
+    merged_by_id = {}
+    for i, m in enumerate(merged):
+        merged_by_id[m.get("id")] = i  # single .get("id") per message
+
     ids_to_remove = set()
+    append_msg = merged.append  # micro-optimize the tight loop
 
     for msg in right:
         msg_id = msg.get("id")
-
-        if (existing_idx := merged_by_id.get(msg_id)) is not None:
-            if msg.get("type") == "remove-ui":
+        msg_type = msg.get("type")
+        existing_idx = merged_by_id.get(msg_id)
+        # carefully check if index is found (can be 0), check None explicitly
+        if existing_idx is not None:
+            if msg_type == "remove-ui":
                 ids_to_remove.add(msg_id)
             else:
                 ids_to_remove.discard(msg_id)
-
-                if cast(UIMessage, msg).get("metadata", {}).get("merge", False):
+                metadata = msg.get("metadata")
+                # Only copy/merge if needed
+                if metadata and metadata.get("merge", False):
                     prev_msg = merged[existing_idx]
+                    # Only copy when doing a merge to minimize allocations
                     msg = msg.copy()
                     msg["props"] = {**prev_msg["props"], **msg["props"]}
-
                 merged[existing_idx] = msg
         else:
-            if msg.get("type") == "remove-ui":
+            if msg_type == "remove-ui":
                 raise ValueError(
                     f"Attempting to delete an UI message with an ID that doesn't exist ('{msg_id}')"
                 )
-
             merged_by_id[msg_id] = len(merged)
-            merged.append(msg)
+            append_msg(msg)
 
-    merged = [m for m in merged if m.get("id") not in ids_to_remove]
+    # Only filter if something was removed
+    if ids_to_remove:
+        merged = [m for m in merged if m.get("id") not in ids_to_remove]
     return merged
