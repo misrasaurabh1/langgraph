@@ -15,6 +15,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.config import (
     CONFIG_KEYS,
     COPIABLE_KEYS,
+    RunnableConfig,
     var_child_runnable_config,
 )
 
@@ -313,11 +314,14 @@ def ensure_config(*configs: RunnableConfig | None) -> RunnableConfig:
         for k, v in config.items():
             if _is_not_empty(v) and k not in CONFIG_KEYS:
                 empty[CONF][k] = v
-    for key, value in empty[CONF].items():
+    # Avoid repeated lookups for empty[CONF] and empty["metadata"]
+    conf_dict = empty[CONF]
+    meta_dict = empty["metadata"]
+    for key, value in conf_dict.items():
         if (
             not key.startswith("__")
             and isinstance(value, (str, int, float, bool))
-            and key not in empty["metadata"]
+            and key not in meta_dict
         ):
-            empty["metadata"][key] = value
+            meta_dict[key] = value
     return empty
