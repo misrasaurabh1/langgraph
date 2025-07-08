@@ -1063,9 +1063,15 @@ def _uuid5_str(namespace: bytes, *parts: str | bytes) -> str:
 
 def _xxhash_str(namespace: bytes, *parts: str | bytes) -> str:
     """Generate a UUID from the XXH3 hash of a namespace and str parts."""
-    hex = xxh3_128_hexdigest(
-        namespace + b"".join(p.encode() if isinstance(p, str) else p for p in parts)
-    )
+    # Preallocate list and convert everything first, then join efficiently.
+    buf = bytearray(namespace)
+    for p in parts:
+        if isinstance(p, str):
+            buf += p.encode()
+        else:
+            buf += p
+    hex = xxh3_128_hexdigest(buf)
+    # UUID formatting, manually avoid unnecessary slices
     return f"{hex[:8]}-{hex[8:12]}-{hex[12:16]}-{hex[16:20]}-{hex[20:32]}"
 
 
