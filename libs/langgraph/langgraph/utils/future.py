@@ -17,14 +17,14 @@ EAGER_NOT_SUPPORTED = sys.version_info < (3, 12)
 
 
 def _get_loop(fut: asyncio.Future) -> asyncio.AbstractEventLoop:
-    # Tries to call Future.get_loop() if it's available.
-    # Otherwise fallbacks to using the old '_loop' property.
-    try:
-        get_loop = fut.get_loop
-    except AttributeError:
-        pass
-    else:
-        return get_loop()
+    # Fast path: check and cache per class if get_loop exists
+    cls = type(fut)
+    has_get_loop = _future_has_get_loop.get(cls)
+    if has_get_loop is None:
+        has_get_loop = hasattr(fut, "get_loop")
+        _future_has_get_loop[cls] = has_get_loop
+    if has_get_loop:
+        return fut.get_loop()
     return fut._loop
 
 
@@ -218,3 +218,6 @@ def run_coroutine_threadsafe(
 
         loop.call_soon_threadsafe(callback, context=context)
         return future
+
+
+_future_has_get_loop = {}
