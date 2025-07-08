@@ -100,7 +100,7 @@ class RemoteGraph(PregelProtocol):
 
     def __init__(
         self,
-        assistant_id: str,  # graph_id
+        assistant_id: str,
         /,
         *,
         url: str | None = None,
@@ -130,10 +130,7 @@ class RemoteGraph(PregelProtocol):
                 If not provided, defaults to the assistant ID.
         """
         self.assistant_id = assistant_id
-        if name is None:
-            self.name = assistant_id
-        else:
-            self.name = name
+        self.name = assistant_id if name is None else name
         self.config = config
 
         if client is None and url is not None:
@@ -647,13 +644,18 @@ class RemoteGraph(PregelProtocol):
         stream_modes, requested, req_single, stream = self._get_stream_modes(
             stream_mode, config
         )
-        if isinstance(input, Command):
-            command: CommandSDK | None = cast(CommandSDK, asdict(input))
-            input = None
-        else:
-            command = None
 
-        for chunk in sync_client.runs.stream(
+        # Lookups are slightly faster than isinstance for exact type
+        command = cast(CommandSDK, asdict(input)) if type(input) is Command else None
+        if command is not None:
+            input = None
+
+        # Precompute caller_ns tuple if present, to avoid doing it per chunk
+        caller_ns_str = (config or {}).get(CONF, {}).get(CONFIG_KEY_CHECKPOINT_NS)
+        caller_ns_tuple = tuple(caller_ns_str.split(NS_SEP)) if caller_ns_str else ()
+
+        # Pre-bind commonly used fields to speed up inner loop
+        chunk_iter = sync_client.runs.stream(
             thread_id=sanitized_config["configurable"].get("thread_id"),
             assistant_id=self.assistant_id,
             input=input,
@@ -665,43 +667,56 @@ class RemoteGraph(PregelProtocol):
             stream_subgraphs=subgraphs or stream is not None,
             if_not_exists="create",
             **kwargs,
-        ):
-            # split mode and ns
-            if NS_SEP in chunk.event:
-                mode, ns_ = chunk.event.split(NS_SEP, 1)
+        )
+
+        for chunk in chunk_iter:
+            event = chunk.event
+            ns = ()
+            if NS_SEP in event:
+                mode, ns_ = event.split(NS_SEP, 1)
                 ns = tuple(ns_.split(NS_SEP))
             else:
-                mode, ns = chunk.event, ()
-            # prepend caller ns (as it is not passed to remote graph)
-            if caller_ns := (config or {}).get(CONF, {}).get(CONFIG_KEY_CHECKPOINT_NS):
-                caller_ns = tuple(caller_ns.split(NS_SEP))
-                ns = caller_ns + ns
-            # stream to parent stream
+                mode = event
+
+            # Only combine caller_ns with ns if caller_ns_tuple has value
+            if caller_ns_tuple:
+                ns = caller_ns_tuple + ns
+
+            # stream to parent stream if required
             if stream is not None and mode in stream.modes:
                 stream((ns, mode, chunk.data))
-            # raise interrupt or errors
-            if chunk.event.startswith("updates"):
+
+            # filter for what was actually requested
+            if mode not in requested:
+                # Still need to check for errors/interrupts!
+                if event.startswith("updates"):
+                    if isinstance(chunk.data, dict) and INTERRUPT in chunk.data:
+                        if caller_ns_tuple:
+                            raise GraphInterrupt(
+                                [Interrupt(**i) for i in chunk.data[INTERRUPT]]
+                            )
+                elif event.startswith("error"):
+                    raise RemoteException(chunk.data)
+                continue
+
+            # Special case: replace data for 'messages' event
+            if event.startswith("messages"):
+                chunk = chunk._replace(data=tuple(chunk.data))  # type: ignore
+
+            # error/interrupt raise for chunks that passed 'requested' filter
+            if event.startswith("updates"):
                 if isinstance(chunk.data, dict) and INTERRUPT in chunk.data:
-                    if caller_ns:
+                    if caller_ns_tuple:
                         raise GraphInterrupt(
                             [Interrupt(**i) for i in chunk.data[INTERRUPT]]
                         )
-            elif chunk.event.startswith("error"):
+            elif event.startswith("error"):
                 raise RemoteException(chunk.data)
-            # filter for what was actually requested
-            if mode not in requested:
-                continue
 
-            if chunk.event.startswith("messages"):
-                chunk = chunk._replace(data=tuple(chunk.data))  # type: ignore
-
-            # emit chunk
+            # Emit only what is needed: fast-path order by most common/likely case
             if subgraphs:
-                if NS_SEP in chunk.event:
-                    mode, ns_ = chunk.event.split(NS_SEP, 1)
-                    ns = tuple(ns_.split(NS_SEP))
-                else:
-                    mode, ns = chunk.event, ()
+                # Redo event split (only if NS_SEP in event), only if subgraphs True
+                # (If code reaches this branch, we already have mode/ns as above)
                 if req_single:
                     yield ns, chunk.data
                 else:
@@ -847,6 +862,8 @@ class RemoteGraph(PregelProtocol):
         Returns:
             The output of the graph.
         """
+        # iterate stream to exhaustion, returning last chunk
+        chunk = None
         for chunk in self.stream(
             input,
             config=config,
@@ -856,10 +873,7 @@ class RemoteGraph(PregelProtocol):
             **kwargs,
         ):
             pass
-        try:
-            return chunk
-        except UnboundLocalError:
-            return None
+        return chunk if chunk is not None else None
 
     async def ainvoke(
         self,
