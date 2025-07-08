@@ -201,15 +201,21 @@ async def arun_with_retry(
 
 def _should_retry_on(retry_policy: RetryPolicy, exc: Exception) -> bool:
     """Check if the given exception should be retried based on the retry policy."""
-    if isinstance(retry_policy.retry_on, Sequence):
-        return isinstance(exc, tuple(retry_policy.retry_on))
-    elif isinstance(retry_policy.retry_on, type) and issubclass(
-        retry_policy.retry_on, Exception
-    ):
-        return isinstance(exc, retry_policy.retry_on)
-    elif callable(retry_policy.retry_on):
-        return retry_policy.retry_on(exc)  # type: ignore[call-arg]
+    retry_on = retry_policy.retry_on
+
+    if isinstance(retry_on, tuple):
+        # retry_on is a tuple of exception types
+        return isinstance(exc, retry_on)
+    elif isinstance(retry_on, type) and issubclass(retry_on, Exception):
+        # retry_on is a single exception type
+        return isinstance(exc, retry_on)
+    elif callable(retry_on):
+        # retry_on is a callable
+        return retry_on(exc)  # type: ignore[call-arg]
+    elif isinstance(retry_on, Sequence):
+        # retry_on is a sequence (excluding str)
+        return isinstance(exc, tuple(retry_on))
     else:
         raise TypeError(
-            "retry_on must be an Exception class, a list or tuple of Exception classes, or a callable"
+            "retry_on must be an Exception class, a tuple of Exception classes, a sequence of Exception classes, or a callable"
         )
