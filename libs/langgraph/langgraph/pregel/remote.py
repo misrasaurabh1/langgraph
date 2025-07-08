@@ -58,22 +58,27 @@ CONF_DROPLIST = frozenset(
 
 def sanitize_config_value(v: Any) -> Any:
     """Recursively sanitize a config value to ensure it contains only primitives."""
-    if isinstance(v, (str, int, float, bool)):
+    # Fast-path for primitives
+    if isinstance(v, _PRIMITIVES):
         return v
+    # Fast-path for dicts with only string keys
     elif isinstance(v, dict):
-        sanitized_dict = {}
-        for k, val in v.items():
-            if isinstance(k, str):
-                sanitized_value = sanitize_config_value(val)
-                if sanitized_value is not None:
-                    sanitized_dict[k] = sanitized_value
+        # Avoid function call for None-check by using comprehension
+        sanitized_dict = {
+            k: sanitized_value
+            for k, val in v.items()
+            if isinstance(k, str)
+            and (sanitized_value := sanitize_config_value(val)) is not None
+        }
         return sanitized_dict
+    # Fast handling for lists and tuples
     elif isinstance(v, (list, tuple)):
-        sanitized_list = []
-        for item in v:
-            sanitized_item = sanitize_config_value(item)
-            if sanitized_item is not None:
-                sanitized_list.append(sanitized_item)
+        # Use a list comprehension
+        sanitized_list = [
+            sanitized_item
+            for item in v
+            if (sanitized_item := sanitize_config_value(item)) is not None
+        ]
         return sanitized_list
     return None
 
@@ -895,3 +900,6 @@ class RemoteGraph(PregelProtocol):
             return chunk
         except UnboundLocalError:
             return None
+
+
+_PRIMITIVES = (str, int, float, bool)
