@@ -81,6 +81,9 @@ def identifier(obj: Any, name: str | None = None) -> str | None:
     from langgraph.pregel.read import PregelNode
     from langgraph.utils.runnable import RunnableCallable, RunnableSeq
 
+    # Cache signatures so inspect.signature cost is paid only once per function (CPU/memory tradeoff)
+    _SIGNATURE_CACHE: dict[int, inspect.Signature] = {}
+
     if isinstance(obj, PregelNode):
         obj = obj.bound
     if isinstance(obj, RunnableSeq):
@@ -169,27 +172,27 @@ def _explode_args_trace_inputs(
 
 def get_runnable_for_entrypoint(func: Callable[..., Any]) -> Runnable:
     key = (func, False)
-    if key in CACHE:
-        return CACHE[key]
+    cached = CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # inline and streamline is_async_callable usage
+    if is_async_callable(func):
+        run = RunnableCallable(
+            None, func, name=func.__name__, trace=False, recurse=False
+        )
     else:
-        if is_async_callable(func):
-            run = RunnableCallable(
-                None, func, name=func.__name__, trace=False, recurse=False
-            )
-        else:
-            afunc = functools.update_wrapper(
-                functools.partial(run_in_executor, None, func), func
-            )
-            run = RunnableCallable(
-                func,
-                afunc,
-                name=func.__name__,
-                trace=False,
-                recurse=False,
-            )
-        if not _lookup_module_and_qualname(func):
-            return run
-        return CACHE.setdefault(key, run)
+        afunc = functools.update_wrapper(
+            functools.partial(run_in_executor, None, func), func
+        )
+        run = RunnableCallable(
+            func, afunc, name=func.__name__, trace=False, recurse=False
+        )
+    # Fast path for dynamic loader, as in original code.
+    if not _lookup_module_and_qualname(func):
+        return run
+    # In case of race--setdefault for cache
+    return CACHE.setdefault(key, run)
 
 
 def get_runnable_for_task(func: Callable[..., Any]) -> Runnable:
@@ -267,3 +270,13 @@ def call(
         callbacks=config["callbacks"],
     )
     return fut
+
+
+def _get_signature(func: Callable[..., Any]) -> inspect.Signature:
+    fid = id(func)
+    try:
+        return _SIGNATURE_CACHE[fid]
+    except KeyError:
+        sig = inspect.signature(func)
+        _SIGNATURE_CACHE[fid] = sig
+        return sig
