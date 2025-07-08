@@ -201,15 +201,28 @@ async def arun_with_retry(
 
 def _should_retry_on(retry_policy: RetryPolicy, exc: Exception) -> bool:
     """Check if the given exception should be retried based on the retry policy."""
-    if isinstance(retry_policy.retry_on, Sequence):
-        return isinstance(exc, tuple(retry_policy.retry_on))
-    elif isinstance(retry_policy.retry_on, type) and issubclass(
-        retry_policy.retry_on, Exception
-    ):
-        return isinstance(exc, retry_policy.retry_on)
-    elif callable(retry_policy.retry_on):
-        return retry_policy.retry_on(exc)  # type: ignore[call-arg]
-    else:
-        raise TypeError(
-            "retry_on must be an Exception class, a list or tuple of Exception classes, or a callable"
-        )
+    retry_on = retry_policy.retry_on
+
+    # Fast-path for common case: tuple or list of Exception classes
+    if isinstance(retry_on, tuple):
+        return isinstance(exc, retry_on)
+    if isinstance(retry_on, list):
+        return isinstance(exc, tuple(retry_on))
+    # Single Exception class
+    if isinstance(retry_on, type) and issubclass(retry_on, Exception):
+        return isinstance(exc, retry_on)
+    # Callable
+    if callable(retry_on):
+        return retry_on(exc)  # type: ignore[call-arg]
+
+    raise TypeError(
+        "retry_on must be an Exception class, a list or tuple of Exception classes, or a callable"
+    )
+
+
+# Helper function to cache tuple conversion for sequences of exception types
+def _as_tuple(obj):
+    try:
+        return tuple(obj)
+    except TypeError:
+        return (obj,)
