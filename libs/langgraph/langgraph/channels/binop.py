@@ -35,17 +35,22 @@ class BinaryOperatorAggregate(Generic[Value], BaseChannel[Value, Value, Value]):
     def __init__(self, typ: type[Value], operator: Callable[[Value, Value], Value]):
         super().__init__(typ)
         self.operator = operator
-        # special forms from typing or collections.abc are not instantiable
-        # so we need to replace them with their concrete counterparts
-        typ = _strip_extras(typ)
-        if typ in (collections.abc.Sequence, collections.abc.MutableSequence):
-            typ = list
-        if typ in (collections.abc.Set, collections.abc.MutableSet):
-            typ = set
-        if typ in (collections.abc.Mapping, collections.abc.MutableMapping):
-            typ = dict
+
+        # Map special abc types to corresponding concrete collection classes, only once
+        mapping = {
+            collections.abc.Sequence: list,
+            collections.abc.MutableSequence: list,
+            collections.abc.Set: set,
+            collections.abc.MutableSet: set,
+            collections.abc.Mapping: dict,
+            collections.abc.MutableMapping: dict,
+        }
+        # Remove wrapper types (like Annotated, Required, NotRequired)
+        concrete_type = _strip_extras(typ)
+        # Use mapped type or the original
+        self._init_type = mapping.get(concrete_type, concrete_type)
         try:
-            self.value = typ()
+            self.value = self._init_type()
         except Exception:
             self.value = MISSING
 
@@ -84,11 +89,15 @@ class BinaryOperatorAggregate(Generic[Value], BaseChannel[Value, Value, Value]):
     def update(self, values: Sequence[Value]) -> bool:
         if not values:
             return False
+        op = self.operator
         if self.value is MISSING:
             self.value = values[0]
-            values = values[1:]
-        for value in values:
-            self.value = self.operator(self.value, value)
+            # Start from 1 and iterate directly, no slicing
+            for value in values[1:]:
+                self.value = op(self.value, value)
+        else:
+            for value in values:
+                self.value = op(self.value, value)
         return True
 
     def get(self) -> Value:
