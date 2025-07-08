@@ -100,7 +100,7 @@ class RemoteGraph(PregelProtocol):
 
     def __init__(
         self,
-        assistant_id: str,  # graph_id
+        assistant_id: str,
         /,
         *,
         url: str | None = None,
@@ -130,19 +130,19 @@ class RemoteGraph(PregelProtocol):
                 If not provided, defaults to the assistant ID.
         """
         self.assistant_id = assistant_id
-        if name is None:
-            self.name = assistant_id
-        else:
-            self.name = name
+        self.name = assistant_id if name is None else name
         self.config = config
 
-        if client is None and url is not None:
-            client = get_client(url=url, api_key=api_key, headers=headers)
-        self.client = client
-
-        if sync_client is None and url is not None:
-            sync_client = get_sync_client(url=url, api_key=api_key, headers=headers)
-        self.sync_client = sync_client
+        self.client = client or (
+            get_client(url=url, api_key=api_key, headers=headers)
+            if url is not None
+            else None
+        )
+        self.sync_client = sync_client or (
+            get_sync_client(url=url, api_key=api_key, headers=headers)
+            if url is not None
+            else None
+        )
 
     def _validate_client(self) -> LangGraphClient:
         if self.client is None:
@@ -159,7 +159,8 @@ class RemoteGraph(PregelProtocol):
         return self.sync_client
 
     def copy(self, update: dict[str, Any]) -> Self:
-        attrs = {**self.__dict__, **update}
+        attrs = self.__dict__.copy()
+        attrs.update(update)
         return self.__class__(attrs.pop("assistant_id"), **attrs)
 
     def with_config(self, config: RunnableConfig | None = None, **kwargs: Any) -> Self:
