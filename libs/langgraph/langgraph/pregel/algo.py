@@ -1071,13 +1071,29 @@ def _xxhash_str(namespace: bytes, *parts: str | bytes) -> str:
 
 def task_path_str(tup: str | int | tuple) -> str:
     """Generate a string representation of the task path."""
-    return (
-        f"~{', '.join(task_path_str(x) for x in tup)}"
-        if isinstance(tup, (tuple, list))
-        else f"{tup:010d}"
-        if isinstance(tup, int)
-        else str(tup)
-    )
+    # Fast-path for most inputs, reduce call overhead and recursion
+    if isinstance(tup, int):
+        return f"{tup:010d}"
+    elif isinstance(tup, str):
+        return tup
+    elif isinstance(tup, (tuple, list)):
+        # Iterative implementation to avoid recursion and overhead
+        # Build output in a list for efficient joining
+        # We memoize previously computed child strings (which is not that useful if all args are int/str, but is fast on large trees).
+        output = []
+        stack = []
+        for x in tup:
+            if isinstance(x, int):
+                output.append(f"{x:010d}")
+            elif isinstance(x, str):
+                output.append(x)
+            elif isinstance(x, (tuple, list)):
+                output.append(task_path_str(x))
+            else:
+                output.append(str(x))
+        return f"~{', '.join(output)}"
+    # fallback for any type not covered above
+    return str(tup)
 
 
 LAZY_ATOMIC_COUNTER_LOCK = threading.Lock()
