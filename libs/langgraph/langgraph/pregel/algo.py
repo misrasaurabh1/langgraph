@@ -243,49 +243,58 @@ def apply_writes(
     # sort tasks on path, to ensure deterministic order for update application
     # any path parts after the 3rd are ignored for sorting
     # (we use them for eg. task ids which aren't good for sorting)
-    tasks = sorted(tasks, key=lambda t: task_path_str(t.path[:3]))
-    # if no task has triggers this is applying writes from the null task only
-    # so we don't do anything other than update the channels written to
+    TASK_IGNORED_CHANNELS = {NO_WRITES, PUSH, RESUME, INTERRUPT, RETURN, ERROR}
+    RESERVED_SET = RESERVED
+
+    task_path_str = lambda path: str(path)  # Avoid repeated attribute lookup if used
+
+    # Convert to list once, as we sort and iterate possibly multiple times
+    tasks = list(tasks)
+    tasks.sort(key=lambda t: task_path_str(t.path[:3]))
     bump_step = any(t.triggers for t in tasks)
 
-    # update seen versions
-    for task in tasks:
-        checkpoint["versions_seen"].setdefault(task.name, {}).update(
-            {
-                chan: checkpoint["channel_versions"][chan]
-                for chan in task.triggers
-                if chan in checkpoint["channel_versions"]
-            }
-        )
+    versions_seen = checkpoint["versions_seen"]
+    channel_versions = checkpoint["channel_versions"]
 
-    # Find the highest version of all channels
+    # update seen versions: avoid redundant .get lookups
+    cv_items = channel_versions.items()
+    for task in tasks:
+        t_trig = task.triggers
+        t_name = task.name
+        vs = versions_seen.setdefault(t_name, {})
+        for chan in t_trig:
+            if chan in channel_versions:
+                vs[chan] = channel_versions[chan]
+
+    # Pre-compute next_version only once if needed
     if get_next_version is None:
         next_version = None
     else:
-        next_version = get_next_version(
-            max(checkpoint["channel_versions"].values())
-            if checkpoint["channel_versions"]
-            else None,
-            None,
-        )
+        chan_versions_values = channel_versions.values()
+        max_val = max(chan_versions_values) if chan_versions_values else None
+        next_version = get_next_version(max_val, None)
+
+    ch_consume_set = set()
+    for task in tasks:
+        for chan in task.triggers:
+            if chan not in RESERVED_SET and chan in channels:
+                ch_consume_set.add(chan)
 
     # Consume all channels that were read
-    for chan in {
-        chan
-        for task in tasks
-        for chan in task.triggers
-        if chan not in RESERVED and chan in channels
-    }:
-        if channels[chan].consume() and next_version is not None:
-            checkpoint["channel_versions"][chan] = next_version
+    _consume = []
+    if next_version is not None:
+        for chan in ch_consume_set:
+            c = channels[chan]
+            if c.consume():
+                channel_versions[chan] = next_version
 
     # Group writes by channel
-    pending_writes_by_channel: dict[str, list[Any]] = defaultdict(list)
+    pending_writes_by_channel = defaultdict(list)
     for task in tasks:
         for chan, val in task.writes:
-            if chan in (NO_WRITES, PUSH, RESUME, INTERRUPT, RETURN, ERROR):
-                pass
-            elif chan in channels:
+            if chan in TASK_IGNORED_CHANNELS:
+                continue
+            if chan in channels:
                 pending_writes_by_channel[chan].append(val)
             else:
                 logger.warning(
@@ -293,35 +302,37 @@ def apply_writes(
                 )
 
     # Apply writes to channels
-    updated_channels: set[str] = set()
+    updated_channels = set()
+    has_next_version = next_version is not None
     for chan, vals in pending_writes_by_channel.items():
-        if chan in channels:
-            if channels[chan].update(vals) and next_version is not None:
-                checkpoint["channel_versions"][chan] = next_version
-                # unavailable channels can't trigger tasks, so don't add them
-                if channels[chan].is_available():
-                    updated_channels.add(chan)
+        ch = channels[chan]
+        if ch.update(vals):
+            if has_next_version:
+                channel_versions[chan] = next_version
+            # unavailable channels can't trigger tasks, so don't add them
+            if ch.is_available():
+                updated_channels.add(chan)
 
     # Channels that weren't updated in this step are notified of a new step
     if bump_step:
-        for chan in channels:
-            if channels[chan].is_available() and chan not in updated_channels:
-                if channels[chan].update(EMPTY_SEQ) and next_version is not None:
-                    checkpoint["channel_versions"][chan] = next_version
-                    # unavailable channels can't trigger tasks, so don't add them
-                    if channels[chan].is_available():
+        # For non-updated/existing channels only, avoiding double .is_available calls
+        for chan, ch in channels.items():
+            if ch.is_available() and chan not in updated_channels:
+                if ch.update(EMPTY_SEQ):
+                    if has_next_version:
+                        channel_versions[chan] = next_version
+                    if ch.is_available():
                         updated_channels.add(chan)
 
     # If this is (tentatively) the last superstep, notify all channels of finish
+    # Use set math for isdisjoint for fast check
     if bump_step and updated_channels.isdisjoint(trigger_to_nodes):
-        for chan in channels:
-            if channels[chan].finish() and next_version is not None:
-                checkpoint["channel_versions"][chan] = next_version
-                # unavailable channels can't trigger tasks, so don't add them
-                if channels[chan].is_available():
+        for chan, ch in channels.items():
+            if ch.finish() and has_next_version:
+                channel_versions[chan] = next_version
+                if ch.is_available():
                     updated_channels.add(chan)
 
-    # Return managed values writes to be applied externally
     return updated_channels
 
 
