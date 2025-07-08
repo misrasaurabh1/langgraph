@@ -214,4 +214,7 @@ class NonLocals(ast.NodeVisitor):
 
 def is_xxh3_128_hexdigest(value: str) -> bool:
     """Check if the given string matches the format of xxh3_128_hexdigest."""
-    return bool(re.fullmatch(r"[0-9a-f]{32}", value))
+    return bool(_XXH3_128_HEXDIGEST_RE.fullmatch(value))
+
+
+_XXH3_128_HEXDIGEST_RE = re.compile(r"[0-9a-f]{32}")
