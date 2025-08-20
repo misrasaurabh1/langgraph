@@ -45,17 +45,18 @@ def _add_messages_wrapper(func: Callable) -> Callable[[Messages, Messages], Mess
     ) -> Messages | Callable[[Messages, Messages], Messages]:
         if left is not None and right is not None:
             return func(left, right, **kwargs)
-        elif left is not None or right is not None:
-            msg = (
-                f"Must specify non-null arguments for both 'left' and 'right'. Only "
-                f"received: '{'left' if left else 'right'}'."
-            )
-            raise ValueError(msg)
-        else:
+        elif left is None and right is None:
             return partial(func, **kwargs)
+        else:
+            missing = "right" if left is not None else "left"
+            raise ValueError(
+                "Must specify non-null arguments for both 'left' and 'right'. Only received: '%s'."
+                % missing
+            )
 
+    # Attach docstring only once after definition
     _add_messages.__doc__ = func.__doc__
-    return cast(Callable[[Messages, Messages], Messages], _add_messages)
+    return _add_messages
 
 
 @_add_messages_wrapper
