@@ -337,11 +337,11 @@ class Send:
         return f"Send(node={self.node!r}, arg={self.arg!r})"
 
     def __eq__(self, value: object) -> bool:
-        return (
-            isinstance(value, Send)
-            and self.node == value.node
-            and self.arg == value.arg
-        )
+        # Fast path: use __class__ is comparison instead of isinstance,
+        # skip hasattr checks due to __slots__. This is safe and faster since Send is not subclassed.
+        if self.__class__ is value.__class__:
+            return self.node == value.node and self.arg == value.arg
+        return False
 
 
 N = TypeVar("N", bound=Hashable)
