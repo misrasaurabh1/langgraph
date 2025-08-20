@@ -35,10 +35,8 @@ class Topic(
 
     def __init__(self, typ: type[Value], accumulate: bool = False) -> None:
         super().__init__(typ)
-        # attrs
         self.accumulate = accumulate
-        # state
-        self.values = list[Value]()
+        self.values = []  # type: list[Value]
 
     def __eq__(self, value: object) -> bool:
         return isinstance(value, Topic) and value.accumulate == self.accumulate
@@ -85,10 +83,9 @@ class Topic(
         return updated
 
     def get(self) -> Sequence[Value]:
-        if self.values:
-            return list(self.values)
-        else:
+        if not self.values:
             raise EmptyChannelError
+        return self.values  # Avoid copying; return as-is for speed.
 
     def is_available(self) -> bool:
         return bool(self.values)
