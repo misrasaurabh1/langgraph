@@ -185,68 +185,82 @@ def tasks_w_writes(
     output_keys: str | Sequence[str],
 ) -> tuple[PregelTask, ...]:
     """Apply writes / subgraph states to tasks to be returned in a StateSnapshot."""
+
     pending_writes = pending_writes or []
-    out: list[PregelTask] = []
+    # Preprocess pending_writes for O(1) lookups
+
+    # Maps for (task_id, channel) to value, for efficient retrieval
+    write_map = {}
+    error_map = {}
+    return_map = {}
+    interrupt_map = {}
+    # For sequence output keys, build a nested map for each task_id with channel->val
+    output_key_map = {}
+
+    is_output_str = isinstance(output_keys, str)
+    output_keys_set = {output_keys} if is_output_str else set(output_keys)
+
+    for tid, chan, val in pending_writes:
+        write_map.setdefault(tid, []).append((chan, val))
+        if chan == ERROR:
+            error_map[tid] = val
+        elif chan == RETURN:
+            return_map[tid] = val
+        elif chan == INTERRUPT:
+            if isinstance(val, Sequence) and not isinstance(
+                val, str
+            ):  # Sequence but not str
+                interrupt_map.setdefault(tid, []).extend(val)
+            else:
+                interrupt_map.setdefault(tid, []).append(val)
+        if not is_output_str:
+            if tid not in output_key_map:
+                output_key_map[tid] = {}
+            if chan in output_keys_set:
+                output_key_map[tid][chan] = val
+
+    result = []
+    # Avoid redundant lookups for states.get
+    states_get = states.get if states else lambda _: None
+
     for task in tasks:
-        rtn = next(
-            (
-                val
-                for tid, chan, val in pending_writes
-                if tid == task.id and chan == RETURN
-            ),
-            MISSING,
-        )
-        out.append(
-            PregelTask(
-                task.id,
-                task.name,
-                task.path,
-                next(
-                    (
-                        exc
-                        for tid, n, exc in pending_writes
-                        if tid == task.id and n == ERROR
-                    ),
-                    None,
-                ),
-                tuple(
-                    v
-                    for tid, n, vv in pending_writes
-                    if tid == task.id and n == INTERRUPT
-                    for v in (vv if isinstance(vv, Sequence) else [vv])
-                ),
-                states.get(task.id) if states else None,
-                (
+        tid = task.id
+
+        exc = error_map.get(tid, None)
+        interrupts = tuple(interrupt_map.get(tid, []))
+        task_state = states_get(tid)
+
+        # Find if any pending write for this tid and not for ERROR/INTERRUPT
+        has_output = False
+        if tid in write_map:
+            for chan, _ in write_map[tid]:
+                if chan != ERROR and chan != INTERRUPT:
+                    has_output = True
+                    break
+
+        if has_output:
+            if is_output_str:
+                rtn = return_map.get(tid, MISSING)
+                task_output = (
                     rtn
                     if rtn is not MISSING
                     else next(
-                        (
-                            val
-                            for tid, chan, val in pending_writes
-                            if tid == task.id and chan == output_keys
-                        ),
+                        (val for chan, val in write_map[tid] if chan == output_keys),
                         None,
                     )
-                    if isinstance(output_keys, str)
-                    else {
-                        chan: val
-                        for tid, chan, val in pending_writes
-                        if tid == task.id
-                        and (
-                            chan == output_keys
-                            if isinstance(output_keys, str)
-                            else chan in output_keys
-                        )
-                    }
                 )
-                if any(
-                    w[0] == task.id and w[1] not in (ERROR, INTERRUPT)
-                    for w in pending_writes
-                )
-                else None,
+            else:
+                # For sequence, produce {chan: val, ...} for matching keys
+                task_output = output_key_map.get(tid, {})
+        else:
+            task_output = None
+
+        result.append(
+            PregelTask(
+                tid, task.name, task.path, exc, interrupts, task_state, task_output
             )
         )
-    return tuple(out)
+    return tuple(result)
 
 
 COLOR_MAPPING = {
