@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, Union
 from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
@@ -190,40 +190,66 @@ def ui_message_reducer(
         )
 
     """
-    if not isinstance(left, list):
-        left = [left]
 
-    if not isinstance(right, list):
-        right = [right]
+    # Inline the is-list branch to avoid repeated isinstance checks
+    if isinstance(left, list):
+        left_list = left
+    else:
+        left_list = [left]
 
-    # merge messages
-    merged = left.copy()
-    merged_by_id = {m.get("id"): i for i, m in enumerate(merged)}
+    if isinstance(right, list):
+        right_list = right
+    else:
+        right_list = [right]
+
+    # Use dict to map ids to index+message, to reduce passes
+    merged = []
+    merged_by_id = {}
+    for i, m in enumerate(left_list):
+        msg_id = m.get("id")
+        merged.append(m)
+        merged_by_id[msg_id] = i
+
     ids_to_remove = set()
 
-    for msg in right:
-        msg_id = msg.get("id")
+    # To reduce repeated dict lookups, pull info out once
+    append = merged.append
+    len_merged = len(merged)
 
-        if (existing_idx := merged_by_id.get(msg_id)) is not None:
-            if msg.get("type") == "remove-ui":
+    for msg in right_list:
+        msg_id = msg.get("id")
+        msg_type = msg.get("type")
+
+        existing_idx = merged_by_id.get(msg_id)
+        if existing_idx is not None:
+            if msg_type == "remove-ui":
                 ids_to_remove.add(msg_id)
             else:
                 ids_to_remove.discard(msg_id)
-
-                if cast(UIMessage, msg).get("metadata", {}).get("merge", False):
+                # Only access metadata once if possible
+                metadata = msg.get("metadata")
+                if metadata and metadata.get("merge", False):
                     prev_msg = merged[existing_idx]
+                    # only shallow copy for msg since it's a dict, but that's the original behavior
                     msg = msg.copy()
                     msg["props"] = {**prev_msg["props"], **msg["props"]}
-
                 merged[existing_idx] = msg
         else:
-            if msg.get("type") == "remove-ui":
+            if msg_type == "remove-ui":
                 raise ValueError(
                     f"Attempting to delete an UI message with an ID that doesn't exist ('{msg_id}')"
                 )
+            merged_by_id[msg_id] = len_merged
+            append(msg)
+            len_merged += 1
 
-            merged_by_id[msg_id] = len(merged)
-            merged.append(msg)
+    # Only filter if there are any to remove
+    if ids_to_remove:
+        filtered = []
+        add_filtered = filtered.append
+        for m in merged:
+            if m.get("id") not in ids_to_remove:
+                add_filtered(m)
+        merged = filtered
 
-    merged = [m for m in merged if m.get("id") not in ids_to_remove]
     return merged
