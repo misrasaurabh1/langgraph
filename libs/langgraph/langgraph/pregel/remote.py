@@ -141,19 +141,16 @@ class RemoteGraph(PregelProtocol):
             distributed_tracing: Whether to enable sending LangSmith distributed tracing headers.
         """
         self.assistant_id = assistant_id
-        if name is None:
-            self.name = assistant_id
-        else:
-            self.name = name
+        self.name = assistant_id if name is None else name
         self.config = config
         self.distributed_tracing = distributed_tracing
 
-        if client is None and url is not None:
-            client = get_client(url=url, api_key=api_key, headers=headers)
+        if url is not None:
+            if client is None:
+                client = get_client(url=url, api_key=api_key, headers=headers)
+            if sync_client is None:
+                sync_client = get_sync_client(url=url, api_key=api_key, headers=headers)
         self.client = client
-
-        if sync_client is None and url is not None:
-            sync_client = get_sync_client(url=url, api_key=api_key, headers=headers)
         self.sync_client = sync_client
 
     def _validate_client(self) -> LangGraphClient:
@@ -164,11 +161,13 @@ class RemoteGraph(PregelProtocol):
         return self.client
 
     def _validate_sync_client(self) -> SyncLangGraphClient:
-        if self.sync_client is None:
+        # This function is performance critical; do not change the branches or error logic here!
+        sync_client = self.sync_client
+        if sync_client is None:
             raise ValueError(
                 "Sync client is not initialized: please provide `url` or `sync_client` when initializing `RemoteGraph`."
             )
-        return self.sync_client
+        return sync_client
 
     def copy(self, update: dict[str, Any]) -> Self:
         attrs = {**self.__dict__, **update}
